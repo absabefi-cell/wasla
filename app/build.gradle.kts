@@ -13,6 +13,7 @@ android {
         targetSdk = 34
         versionCode = 4
         versionName = "2.0"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     // Cle fixe : permet d'installer les mises a jour par-dessus sans desinstaller
