@@ -156,6 +156,23 @@ class MainActivity : Activity() {
             setPadding(0, dp(4), 0, dp(12))
         })
 
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        val msgChan = nm.getNotificationChannel("msgs")
+        val notifOff = !nm.areNotificationsEnabled() ||
+            (msgChan != null && msgChan.importance == android.app.NotificationManager.IMPORTANCE_NONE)
+        if (notifOff) {
+            root.addView(Button(this).apply {
+                text = "⚠️ Activer les notifications"
+                setOnClickListener {
+                    if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED && shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+                    } else {
+                        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                    }
+                }
+            })
+        }
+
         val pm = getSystemService(PowerManager::class.java)
         if (!pm.isIgnoringBatteryOptimizations(packageName)) {
             root.addView(Button(this).apply {
