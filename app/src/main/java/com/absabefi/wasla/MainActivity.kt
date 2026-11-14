@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private var mode = ""
     private val refresh: () -> Unit = { render() }
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -42,7 +43,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        visible = true
         Hub.listeners.add(refresh)
+        CallManager.init(this)
+        CallManager.listeners.add(refresh)
         Hub.onLoginError = { msg ->
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             mode = ""
@@ -58,7 +62,9 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        visible = false
         Hub.listeners.remove(refresh)
+        CallManager.listeners.remove(refresh)
         Hub.onLoginError = null
     }
 
@@ -173,6 +179,27 @@ class MainActivity : Activity() {
             })
         }
 
+        if (Build.VERSION.SDK_INT >= 34 && !nm.canUseFullScreenIntent()) {
+            root.addView(Button(this).apply {
+                text = "⚠️ Autoriser l'ecran d'appel plein ecran"
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName")))
+                    } catch (e: Exception) {
+                    }
+                }
+            })
+        }
+
+        if (CallManager.busy) {
+            root.addView(Button(this).apply {
+                text = "📞 Appel en cours avec " + CallManager.peer + " : revenir"
+                setTextColor(Color.WHITE)
+                background = rounded(GREEN, 10)
+                setOnClickListener { CallManager.openScreen(this@MainActivity) }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).apply { bottomMargin = dp(8) })
+        }
+
         val pm = getSystemService(PowerManager::class.java)
         if (!pm.isIgnoringBatteryOptimizations(packageName)) {
             root.addView(Button(this).apply {
@@ -222,6 +249,45 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         }
 
+        val recent = Hub.calls.sortedByDescending { it.ts }.take(15)
+        if (recent.isNotEmpty()) {
+            root.addView(TextView(this).apply {
+                text = "Appels recents"
+                textSize = 18f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(20), 0, dp(4))
+            })
+            val fmt = java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale.FRENCH)
+            for (c in recent) {
+                val out = c.from == Hub.me
+                val other = if (out) c.to else c.from
+                val missed = !out && c.status == "missed"
+                val what = when {
+                    missed -> "📵 Manque"
+                    c.status == "refused" -> if (out) "↗️ Refuse" else "↙️ Refuse"
+                    c.status == "missed" -> "↗️ Sans reponse"
+                    else -> (if (out) "↗️ " else "↙️ ") + String.format("%d:%02d", c.dur / 60, c.dur % 60)
+                }
+                root.addView(LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    background = rounded(if (missed && !c.seen) 0xFFFFE5E5.toInt() else 0xFFF2F2F2.toInt(), 10)
+                    addView(TextView(this@MainActivity).apply {
+                        text = (if (c.video) "🎥 " else "📞 ") + other + "\n" + what + "  ·  " + fmt.format(java.util.Date(c.ts))
+                        setTextColor(if (missed) 0xFFD32F2F.toInt() else Color.DKGRAY)
+                    }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(Button(this@MainActivity).apply {
+                        text = if (c.video) "🎥" else "📞"
+                        setOnClickListener {
+                            startActivity(Intent(this@MainActivity, CallActivity::class.java).putExtra("out_peer", other).putExtra("out_video", c.video))
+                        }
+                    }, LinearLayout.LayoutParams(dp(56), dp(48)))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
+            }
+            if (Hub.unseenMissed > 0) main.postDelayed({ if (visible) Hub.callsSeen() }, 4000)
+        }
+
         root.addView(Button(this).apply {
             text = "Se deconnecter"
             setOnClickListener {
@@ -232,5 +298,9 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(32) })
         root.visibility = View.VISIBLE
+    }
+
+    companion object {
+        var visible = false
     }
 }

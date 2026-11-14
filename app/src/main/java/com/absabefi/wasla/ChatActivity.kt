@@ -69,14 +69,34 @@ class ChatActivity : Activity() {
         setContentView(root)
     }
 
+    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
+        menu.add(0, 1, 0, "🎥").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+        menu.add(0, 2, 0, "📞").setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+        return true
+    }
+
+    private fun call(video: Boolean) {
+        if (CallManager.busy) {
+            CallManager.openScreen(this)
+            return
+        }
+        startActivity(
+            android.content.Intent(this, CallActivity::class.java)
+                .putExtra("out_peer", with).putExtra("out_video", video)
+        )
+    }
+
     override fun onMenuItemSelected(featureId: Int, item: android.view.MenuItem): Boolean {
         if (item.itemId == android.R.id.home) { finish(); return true }
+        if (item.itemId == 1) { call(true); return true }
+        if (item.itemId == 2) { call(false); return true }
         return super.onMenuItemSelected(featureId, item)
     }
 
     override fun onResume() {
         super.onResume()
         Hub.openChat = with
+        visible = true
         Hub.listeners.add(refresh)
         Hub.history(with)
         getSystemService(NotificationManager::class.java).cancel(1000 + (with.hashCode() and 0xffff))
@@ -86,6 +106,7 @@ class ChatActivity : Activity() {
     override fun onPause() {
         super.onPause()
         if (Hub.openChat == with) Hub.openChat = null
+        visible = false
         Hub.listeners.remove(refresh)
     }
 
@@ -122,5 +143,9 @@ class ChatActivity : Activity() {
             list.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
         }
         scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    companion object {
+        var visible = false
     }
 }

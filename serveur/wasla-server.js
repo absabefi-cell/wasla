@@ -10,8 +10,15 @@ const PORT = process.env.PORT || 3100;
 const DB = path.join(__dirname, 'data.json');
 const KEYFILE = path.join(__dirname, 'admin.key');
 
-let db = { users: {}, tokens: {}, msgs: [] };
+let db = { users: {}, tokens: {}, msgs: [], calls: [] };
 try { db = Object.assign(db, JSON.parse(fs.readFileSync(DB, 'utf8'))); } catch (e) {}
+if (!db.calls) db.calls = [];
+
+// Serveurs STUN/TURN pour les appels (ice.json optionnel, sinon STUN Google)
+function iceServers() {
+  try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'ice.json'), 'utf8')); }
+  catch (e) { return [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }]; }
+}
 
 let ADMIN = '';
 try { ADMIN = fs.readFileSync(KEYFILE, 'utf8').trim(); } catch (e) {}
@@ -120,6 +127,12 @@ wss.on('connection', ws => {
     if (!ws.user) return;
     const s = socks.get(ws.user);
     if (s) { s.delete(ws); if (!s.size) socks.delete(ws.user); }
+    if (!socks.has(ws.user)) {
+      for (const c of [...active.values()]) {
+        if (c.state === 'active' && involves(c, ws.user)) endCall(c, 'lost', 'answered');
+        else if (c.state === 'ringing' && c.from === ws.user) endCall(c, 'cancel', 'missed');
+      }
+    }
     pushContacts();
   });
 });
@@ -132,6 +145,29 @@ setInterval(() => {
   });
 }, 45000);
 
+// ---------- Appels ----------
+const active = new Map(); // callId -> appel en cours
+function involves(c, u) { return c.from === u || c.to === u; }
+function busy(u) { for (const c of active.values()) if (involves(c, u)) return true; return false; }
+function callsFor(u) { return db.calls.filter(c => involves(c, u)).slice(-50); }
+function logCall(c, status) {
+  const rec = { id: c.id, from: c.from, to: c.to, video: !!c.video, ts: c.ts, status, seen: status !== 'missed' };
+  if (c.answeredAt) rec.dur = Math.round((Date.now() - c.answeredAt) / 1000);
+  db.calls.push(rec);
+  if (db.calls.length > 3000) db.calls.splice(0, db.calls.length - 3000);
+  save();
+  toUser(c.from, { t: 'call_log', call: rec });
+  toUser(c.to, { t: 'call_log', call: rec });
+}
+function endCall(c, reason, status) {
+  if (!active.has(c.id)) return;
+  clearTimeout(c.timer);
+  active.delete(c.id);
+  toUser(c.from, { t: 'call_end', callId: c.id, reason });
+  toUser(c.to, { t: 'call_end', callId: c.id, reason });
+  logCall(c, status);
+}
+
 function fail(ws, msg) {
   send(ws, { t: 'err', msg, fatal: true });
   setTimeout(() => ws.close(), 200);
@@ -143,6 +179,8 @@ function attach(ws, u, extra) {
   socks.get(u).add(ws);
   send(ws, Object.assign({ t: extra.token ? 'login_ok' : 'auth_ok', user: u, invisible: !!db.users[u].invisible }, extra));
   send(ws, { t: 'contacts', list: contactsFor(u) });
+  send(ws, { t: 'ice_servers', list: iceServers() });
+  send(ws, { t: 'calls', list: callsFor(u) });
   // Livrer les messages recus pendant l'absence
   let n = 0;
   for (const m of db.msgs) {
@@ -209,6 +247,56 @@ function handle(ws, o) {
       send(ws, { t: 'history', with: w, msgs: list });
       break;
     }
+    case 'call': {
+      const to = String(o.to || '');
+      const id = String(o.callId || '').slice(0, 64);
+      if (!db.users[to] || !id || active.has(id) || to === me) return;
+      const c = { id, from: me, to, video: !!o.video, ts: Date.now(), state: 'ringing' };
+      if (busy(me)) return send(ws, { t: 'call_end', callId: id, reason: 'busy_me' });
+      if (busy(to)) { send(ws, { t: 'call_end', callId: id, reason: 'busy' }); return logCall(c, 'missed'); }
+      active.set(id, c);
+      if (db.users[to].blocked || !toUser(to, { t: 'call', callId: id, from: me, video: c.video })) {
+        return endCall(c, 'offline', 'missed');
+      }
+      c.timer = setTimeout(() => endCall(c, 'timeout', 'missed'), 45000);
+      send(ws, { t: 'ringing', callId: id });
+      break;
+    }
+    case 'accept': {
+      const c = active.get(String(o.callId || ''));
+      if (!c || c.to !== me || c.state !== 'ringing') return;
+      clearTimeout(c.timer);
+      c.state = 'active';
+      c.answeredAt = Date.now();
+      toUser(c.from, { t: 'accepted', callId: c.id, video: !!o.video });
+      break;
+    }
+    case 'reject': {
+      const c = active.get(String(o.callId || ''));
+      if (!c || c.to !== me || c.state !== 'ringing') return;
+      endCall(c, 'refused', 'refused');
+      break;
+    }
+    case 'hangup': {
+      const c = active.get(String(o.callId || ''));
+      if (!c || !involves(c, me)) return;
+      endCall(c, 'hangup', c.state === 'active' ? 'answered' : 'missed');
+      break;
+    }
+    case 'sdp':
+    case 'ice':
+    case 'video': {
+      const c = active.get(String(o.callId || ''));
+      if (!c || !involves(c, me)) return;
+      const peer = c.from === me ? c.to : c.from;
+      const out = Object.assign({}, o, { from: me });
+      toUser(peer, out);
+      break;
+    }
+    case 'calls_seen':
+      for (const c of db.calls) if (c.to === me && !c.seen) c.seen = true;
+      save();
+      break;
     case 'invisible':
       db.users[me].invisible = !!o.on;
       save();

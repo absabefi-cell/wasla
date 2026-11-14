@@ -30,7 +30,18 @@ class ChatService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("service", "Connexion", NotificationManager.IMPORTANCE_MIN))
         nm.createNotificationChannel(NotificationChannel("msgs", "Messages", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel("calls2", "Appels entrants", NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null)
+            enableVibration(false)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        })
+        nm.createNotificationChannel(NotificationChannel("missed", "Appels manques", NotificationManager.IMPORTANCE_HIGH))
+        CallManager.init(this)
         goForeground()
+
+        CallManager.onIncoming = { showIncoming() }
+        CallManager.onFinished = { nm.cancel(CALL_NOTIF) }
+        Hub.onMissed = { c -> showMissed(c) }
 
         Hub.onIncoming = { m -> if (Hub.openChat != m.from) notifyMsg(m) }
         Hub.listeners.add(refresh)
@@ -48,6 +59,16 @@ class ChatService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            "REJECT" -> {
+                CallManager.reject()
+                getSystemService(NotificationManager::class.java).cancel(CALL_NOTIF)
+            }
+            "CALLMODE" -> {
+                inCall = intent.getBooleanExtra("on", false)
+                inCallVideo = intent.getBooleanExtra("video", false)
+            }
+        }
         goForeground()
         if (!Hub.hasToken()) {
             stopSelf()
@@ -79,13 +100,75 @@ class ChatService : Service() {
             .build()
     }
 
+    private var inCall = false
+    private var inCallVideo = false
+
     private fun goForeground() {
         val n = statusNotif()
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
+        if (Build.VERSION.SDK_INT >= 30) {
+            var type = if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0
+            if (inCall && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                if (inCallVideo && checkSelfPermission(android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+            }
+            try {
+                startForeground(1, n, type)
+            } catch (e: Exception) {
+                try {
+                    startForeground(1, n, if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0)
+                } catch (e2: Exception) {
+                }
+            }
         } else {
             startForeground(1, n)
         }
+    }
+
+    private fun callIntent(action: String?, req: Int): PendingIntent {
+        val i = Intent(this, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (action != null) i.putExtra("do", action)
+        return PendingIntent.getActivity(this, req, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+
+    private fun showIncoming() {
+        val who = CallManager.peer
+        val video = CallManager.incomingVideo
+        val reject = PendingIntent.getService(
+            this, 50, Intent(this, ChatService::class.java).setAction("REJECT"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val b = Notification.Builder(this, "calls2")
+            .setSmallIcon(android.R.drawable.sym_call_incoming)
+            .setContentTitle(who)
+            .setContentText(if (video) "Appel video entrant" else "Appel audio entrant")
+            .setCategory(Notification.CATEGORY_CALL)
+            .setOngoing(true)
+            .setContentIntent(callIntent(null, 40))
+            .setFullScreenIntent(callIntent(null, 41), true)
+            .addAction(Notification.Action.Builder(null, "Refuser", reject).build())
+            .addAction(Notification.Action.Builder(null, "Audio", callIntent("audio", 42)).build())
+            .addAction(Notification.Action.Builder(null, "Video", callIntent("video", 43)).build())
+        getSystemService(NotificationManager::class.java).notify(CALL_NOTIF, b.build())
+        // Telephone deverrouille et app ouverte : afficher l'ecran directement
+        try {
+            if (MainActivity.visible || ChatActivity.visible) CallManager.openScreen(this)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun showMissed(c: CallLog) {
+        val i = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(this, 60, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val n = Notification.Builder(this, "missed")
+            .setSmallIcon(android.R.drawable.sym_call_missed)
+            .setContentTitle("Appel manque")
+            .setContentText((if (c.video) "Appel video de " else "Appel de ") + c.from)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(2000 + (c.id.hashCode() and 0xffff), n)
     }
 
     private fun updateStatus() {
@@ -114,6 +197,16 @@ class ChatService : Service() {
     }
 
     companion object {
+        const val CALL_NOTIF = 77
+
+        /** Passe le service en mode appel (micro/camera autorises en arriere-plan). */
+        fun callMode(c: Context, on: Boolean, video: Boolean) {
+            try {
+                c.startForegroundService(Intent(c, ChatService::class.java).setAction("CALLMODE").putExtra("on", on).putExtra("video", video))
+            } catch (e: Exception) {
+            }
+        }
+
         fun start(c: Context) {
             try {
                 c.startForegroundService(Intent(c, ChatService::class.java))

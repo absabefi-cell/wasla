@@ -11,8 +11,8 @@ android {
         applicationId = "com.absabefi.wasla"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "2.0"
     }
 
     // Cle fixe : permet d'installer les mises a jour par-dessus sans desinstaller
@@ -36,4 +36,5 @@ android {
 
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.getstream:stream-webrtc-android:1.1.1")
 }

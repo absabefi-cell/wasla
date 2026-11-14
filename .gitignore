@@ -9,3 +9,4 @@ serveur/data.json.tmp
 serveur/admin.key
 serveur/*.log
 serveur/lien.txt
+serveur/ice.json

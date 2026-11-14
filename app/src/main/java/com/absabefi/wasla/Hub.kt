@@ -17,6 +17,8 @@ import java.util.concurrent.TimeUnit
 data class Contact(val user: String, val online: Boolean)
 
 // state : 0 = en attente, 1 = envoye (✓), 2 = recu (✓✓)
+data class CallLog(val id: String, val from: String, val to: String, val video: Boolean, val ts: Long, val status: String, var seen: Boolean, val dur: Int)
+
 data class Msg(val id: String, val from: String, val to: String, val text: String, var ts: Long, var state: Int)
 
 /** Connexion unique au serveur, partagee par le service et les ecrans. */
@@ -37,6 +39,13 @@ object Hub {
     val listeners = CopyOnWriteArrayList<() -> Unit>()
     var onIncoming: ((Msg) -> Unit)? = null
     var onLoginError: ((String) -> Unit)? = null
+    var onMissed: ((CallLog) -> Unit)? = null
+
+    var iceServers: org.json.JSONArray = org.json.JSONArray()
+        private set
+    var calls: List<CallLog> = emptyList()
+        private set
+    private val notifiedMissed = HashSet<String>()
 
     var connected = false
         private set
@@ -79,6 +88,7 @@ object Hub {
         connected = false
         chats.clear()
         contacts = emptyList()
+        calls = emptyList()
         outbox.clear()
         notifyUi()
     }
@@ -226,7 +236,46 @@ object Hub {
                 invisible = o.optBoolean("on")
                 notifyUi()
             }
+            "ice_servers" -> iceServers = o.optJSONArray("list") ?: org.json.JSONArray()
+            "calls" -> {
+                val a = o.getJSONArray("list")
+                calls = (0 until a.length()).map { parseCall(a.getJSONObject(it)) }
+                for (c in calls) checkMissed(c)
+                notifyUi()
+            }
+            "call_log" -> {
+                val c = parseCall(o.getJSONObject("call"))
+                calls = (calls.filter { it.id != c.id } + c).takeLast(50)
+                checkMissed(c)
+                notifyUi()
+            }
+            "call", "ringing", "accepted", "call_end", "sdp", "ice", "video" -> CallManager.onSignal(o)
         }
+    }
+
+    private fun parseCall(o: JSONObject) = CallLog(
+        o.getString("id"), o.getString("from"), o.getString("to"), o.optBoolean("video"),
+        o.optLong("ts"), o.optString("status"), o.optBoolean("seen", true), o.optInt("dur")
+    )
+
+    private fun checkMissed(c: CallLog) {
+        if (c.status == "missed" && c.to == me && !c.seen && notifiedMissed.add(c.id)) onMissed?.invoke(c)
+    }
+
+    val unseenMissed: Int get() = calls.count { it.status == "missed" && it.to == me && !it.seen }
+
+    fun callsSeen() {
+        if (unseenMissed == 0) return
+        for (c in calls) c.seen = true
+        sendRaw(JSONObject().put("t", "calls_seen"))
+        notifyUi()
+    }
+
+    /** Envoie un message brut au serveur. false si pas connecte. */
+    fun sendRaw(o: JSONObject): Boolean {
+        val w = ws
+        if (!connected || w == null) return false
+        return w.send(o.toString())
     }
 
     private fun parseMsg(o: JSONObject) = Msg(

@@ -1,0 +1,6 @@
+[
+  { "urls": ["stun:stun.l.google.com:19302"] },
+  { "urls": ["turn:METTRE_ICI.relay.metered.ca:80", "turn:METTRE_ICI.relay.metered.ca:443", "turns:METTRE_ICI.relay.metered.ca:443?transport=tcp"],
+    "username": "METTRE_ICI",
+    "credential": "METTRE_ICI" }
+]
