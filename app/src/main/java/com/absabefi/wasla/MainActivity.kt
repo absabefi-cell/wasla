@@ -127,9 +127,12 @@ class MainActivity : Activity() {
     private fun field(hint: String, value: String, type: Int): EditText {
         val e = EditText(this).apply {
             this.hint = hint
-            setText(value)
-            inputType = if (type == InputType.TYPE_TEXT_VARIATION_URI) InputType.TYPE_CLASS_TEXT or type else type
             isSingleLine = true
+            inputType = if (type == InputType.TYPE_TEXT_VARIATION_URI) InputType.TYPE_CLASS_TEXT or type else type
+            if (type and InputType.TYPE_TEXT_VARIATION_PASSWORD != 0) {
+                transformationMethod = android.text.method.PasswordTransformationMethod.getInstance()
+            }
+            setText(value)
         }
         root.addView(e, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         return e

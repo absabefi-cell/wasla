@@ -11,8 +11,8 @@ android {
         applicationId = "com.absabefi.wasla"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
     }
 
     // Cle fixe : permet d'installer les mises a jour par-dessus sans desinstaller
