@@ -27,12 +27,16 @@ jobs:
         run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Renommer
-        run: cp app/build/outputs/apk/debug/app-debug.apk Wasla.apk
+        run: |
+          cp app/build/outputs/apk/principal/debug/app-principal-debug.apk Wasla.apk
+          cp app/build/outputs/apk/deux/debug/app-deux-debug.apk Wasla2.apk
 
       - name: Publier
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Wasla (derniere version)
-          files: Wasla.apk
+          files: |
+            Wasla.apk
+            Wasla2.apk
           make_latest: true

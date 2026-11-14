@@ -20,7 +20,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
-        android:label="Wasla"
+        android:label="${appLabel}"
         android:icon="@android:drawable/sym_action_chat"
         android:theme="@android:style/Theme.Material.Light.DarkActionBar"
         android:usesCleartextTraffic="true">
@@ -48,7 +48,7 @@
             android:turnScreenOn="true"
             android:excludeFromRecents="true"
             android:screenOrientation="portrait"
-            android:taskAffinity="com.absabefi.wasla.call" />
+            android:taskAffinity="${applicationId}.call" />
 
         <service
             android:name=".ChatService"
