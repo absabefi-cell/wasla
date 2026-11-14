@@ -30,6 +30,7 @@ jobs:
         run: |
           cp app/build/outputs/apk/principal/debug/app-principal-debug.apk Wasla.apk
           cp app/build/outputs/apk/deux/debug/app-deux-debug.apk Wasla2.apk
+          cp app/build/outputs/apk/trois/debug/app-trois-debug.apk Wasla3.apk
 
       - name: Publier
         uses: softprops/action-gh-release@v2
@@ -39,4 +40,5 @@ jobs:
           files: |
             Wasla.apk
             Wasla2.apk
+            Wasla3.apk
           make_latest: true

@@ -32,6 +32,7 @@ import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
+import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import org.webrtc.audio.JavaAudioDeviceModule
@@ -78,7 +79,7 @@ object CallManager {
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
     private var videoSource: VideoSource? = null
-    private var capturer: CameraVideoCapturer? = null
+    private var capturer: VideoCapturer? = null
     private var texHelper: SurfaceTextureHelper? = null
     private var videoTx: RtpTransceiver? = null
     var localVideoTrack: VideoTrack? = null
@@ -168,7 +169,7 @@ object CallManager {
     }
 
     fun switchCamera() {
-        capturer?.switchCamera(null)
+        (capturer as? CameraVideoCapturer)?.switchCamera(null)
     }
 
     /** Active/desactive la camera pendant l'appel (passer de l'audio a la video). */
@@ -177,9 +178,11 @@ object CallManager {
         val c = ctx ?: return
         if (on && localVideoTrack == null) {
             try {
-                val en = Camera2Enumerator(c)
-                val name = en.deviceNames.firstOrNull { en.isFrontFacing(it) } ?: en.deviceNames.firstOrNull() ?: return
-                val cap = en.createCapturer(name, null) ?: return
+                val cap: VideoCapturer = if (BuildConfig.MIRE) MireCapturer() else {
+                    val en = Camera2Enumerator(c)
+                    val name = en.deviceNames.firstOrNull { en.isFrontFacing(it) } ?: en.deviceNames.firstOrNull() ?: return
+                    en.createCapturer(name, null) ?: return
+                }
                 val helper = SurfaceTextureHelper.create("camera", egl.eglBaseContext)
                 val src = f.createVideoSource(false)
                 cap.initialize(helper, c, src.capturerObserver)

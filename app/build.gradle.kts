@@ -11,12 +11,15 @@ android {
         applicationId = "com.absabefi.wasla"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "2.0"
+        versionCode = 6
+        versionName = "2.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        buildConfigField("boolean", "MIRE", "false")
     }
 
-    // Deux copies installables cote a cote : "Wasla" et "Wasla 2" (pour tester avec 2 comptes)
+    buildFeatures { buildConfig = true }
+
+    // Deux copies installables cote a cote : "Wasla", "Wasla 2" et "Wasla 3" (pour tester avec plusieurs comptes)
     flavorDimensions += "copie"
     productFlavors {
         create("principal") {
@@ -28,6 +31,14 @@ android {
             applicationIdSuffix = ".deux"
             versionNameSuffix = "-2"
             manifestPlaceholders["appLabel"] = "Wasla 2"
+        }
+        // Wasla 3 : envoie une image de test animee au lieu de la camera
+        create("trois") {
+            dimension = "copie"
+            applicationIdSuffix = ".trois"
+            versionNameSuffix = "-3"
+            manifestPlaceholders["appLabel"] = "Wasla 3"
+            buildConfigField("boolean", "MIRE", "true")
         }
     }
 
