@@ -1,0 +1,9 @@
+{
+  "name": "wasla-serveur",
+  "version": "1.0.0",
+  "private": true,
+  "main": "wasla-server.js",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

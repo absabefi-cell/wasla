@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+serveur/node_modules/
+serveur/data.json
+serveur/data.json.tmp
+serveur/admin.key
+serveur/*.log
+serveur/lien.txt

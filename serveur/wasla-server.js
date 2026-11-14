@@ -1,0 +1,221 @@
+// Wasla : serveur de messagerie (Node + WebSocket)
+// Separe de MonChat : son propre dossier, son propre port (3100), ses propres donnees.
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { WebSocketServer } = require('ws');
+
+const PORT = process.env.PORT || 3100;
+const DB = path.join(__dirname, 'data.json');
+const KEYFILE = path.join(__dirname, 'admin.key');
+
+let db = { users: {}, tokens: {}, msgs: [] };
+try { db = Object.assign(db, JSON.parse(fs.readFileSync(DB, 'utf8'))); } catch (e) {}
+
+let ADMIN = '';
+try { ADMIN = fs.readFileSync(KEYFILE, 'utf8').trim(); } catch (e) {}
+if (!ADMIN) { ADMIN = crypto.randomBytes(24).toString('hex'); fs.writeFileSync(KEYFILE, ADMIN, { mode: 0o600 }); }
+
+let saveT = null;
+function save() {
+  clearTimeout(saveT);
+  saveT = setTimeout(saveNow, 300);
+}
+function saveNow() {
+  fs.writeFileSync(DB + '.tmp', JSON.stringify(db));
+  fs.renameSync(DB + '.tmp', DB);
+}
+process.on('SIGINT', () => { saveNow(); process.exit(0); });
+process.on('SIGTERM', () => { saveNow(); process.exit(0); });
+
+function hash(pass, salt) { return crypto.scryptSync(pass, salt, 32).toString('hex'); }
+
+const socks = new Map(); // nom -> Set de connexions
+function send(ws, o) { if (ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function toUser(u, o) {
+  const s = socks.get(u);
+  if (!s || !s.size) return false;
+  s.forEach(w => send(w, o));
+  return true;
+}
+function visible(u) { return socks.has(u) && socks.get(u).size > 0 && !db.users[u].invisible; }
+function contactsFor(u) {
+  return Object.keys(db.users)
+    .filter(x => x !== u && !db.users[x].blocked)
+    .sort()
+    .map(x => ({ user: x, online: visible(x) }));
+}
+function pushContacts() { for (const u of socks.keys()) toUser(u, { t: 'contacts', list: contactsFor(u) }); }
+
+function kick(u) {
+  const s = socks.get(u);
+  if (s) s.forEach(w => { send(w, { t: 'err', msg: 'Compte bloque', fatal: true }); setTimeout(() => w.close(), 200); });
+  for (const [tok, owner] of Object.entries(db.tokens)) if (owner === u) delete db.tokens[tok];
+}
+
+// ---------- Administration (seulement avec la cle admin.key) ----------
+function admin(o) {
+  const u = String(o.user || '').trim().toLowerCase();
+  switch (o.cmd) {
+    case 'ajouter': {
+      if (!u || !o.pass) return 'Usage : node admin.js ajouter nom motdepasse';
+      const existed = !!db.users[u];
+      const salt = crypto.randomBytes(16).toString('hex');
+      db.users[u] = Object.assign(db.users[u] || { blocked: false, invisible: false }, { salt, hash: hash(String(o.pass), salt) });
+      save(); pushContacts();
+      return existed ? 'Mot de passe change pour ' + u : 'Compte cree : ' + u;
+    }
+    case 'bloquer':
+      if (!db.users[u]) return 'Compte introuvable : ' + u;
+      db.users[u].blocked = true; kick(u); save(); pushContacts();
+      return 'Compte bloque : ' + u;
+    case 'debloquer':
+      if (!db.users[u]) return 'Compte introuvable : ' + u;
+      db.users[u].blocked = false; save(); pushContacts();
+      return 'Compte debloque : ' + u;
+    case 'supprimer':
+      if (!db.users[u]) return 'Compte introuvable : ' + u;
+      kick(u); delete db.users[u]; save(); pushContacts();
+      return 'Compte supprime : ' + u;
+    case 'liste':
+      return Object.keys(db.users).sort().map(x =>
+        (visible(x) ? '[en ligne] ' : socks.has(x) ? '[invisible] ' : '[hors ligne] ') + x + (db.users[x].blocked ? ' (BLOQUE)' : '')
+      ).join('\n') || 'Aucun compte';
+  }
+  return 'Commandes : ajouter, bloquer, debloquer, supprimer, liste';
+}
+
+const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/admin') {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 10000) req.destroy(); });
+    req.on('end', () => {
+      let o = {};
+      try { o = JSON.parse(body); } catch (e) {}
+      const ok = typeof o.key === 'string' && o.key.length === ADMIN.length &&
+        crypto.timingSafeEqual(Buffer.from(o.key), Buffer.from(ADMIN));
+      res.writeHead(ok ? 200 : 403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(ok ? admin(o) : 'Refuse');
+    });
+    return;
+  }
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Wasla serveur OK');
+});
+
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', ws => {
+  ws.user = null;
+  ws.alive = true;
+  ws.on('pong', () => { ws.alive = true; });
+  ws.on('message', raw => {
+    let o;
+    try { o = JSON.parse(raw); } catch (e) { return; }
+    ws.alive = true;
+    handle(ws, o);
+  });
+  ws.on('close', () => {
+    if (!ws.user) return;
+    const s = socks.get(ws.user);
+    if (s) { s.delete(ws); if (!s.size) socks.delete(ws.user); }
+    pushContacts();
+  });
+});
+
+setInterval(() => {
+  wss.clients.forEach(w => {
+    if (!w.alive) return w.terminate();
+    w.alive = false;
+    try { w.ping(); } catch (e) {}
+  });
+}, 45000);
+
+function fail(ws, msg) {
+  send(ws, { t: 'err', msg, fatal: true });
+  setTimeout(() => ws.close(), 200);
+}
+
+function attach(ws, u, extra) {
+  ws.user = u;
+  if (!socks.has(u)) socks.set(u, new Set());
+  socks.get(u).add(ws);
+  send(ws, Object.assign({ t: extra.token ? 'login_ok' : 'auth_ok', user: u, invisible: !!db.users[u].invisible }, extra));
+  send(ws, { t: 'contacts', list: contactsFor(u) });
+  // Livrer les messages recus pendant l'absence
+  let n = 0;
+  for (const m of db.msgs) {
+    if (m.to === u && !m.delivered) {
+      send(ws, Object.assign({ t: 'msg' }, m));
+      m.delivered = true;
+      toUser(m.from, { t: 'delivered', id: m.id });
+      n++;
+    }
+  }
+  if (n) save();
+  pushContacts();
+}
+
+function handle(ws, o) {
+  if (!ws.user) {
+    if (o.t === 'login') {
+      const u = String(o.user || '').trim().toLowerCase();
+      const rec = db.users[u];
+      if (!rec || rec.hash !== hash(String(o.pass || ''), rec.salt)) return fail(ws, 'Nom ou mot de passe incorrect');
+      if (rec.blocked) return fail(ws, 'Compte bloque');
+      const token = crypto.randomBytes(24).toString('hex');
+      db.tokens[token] = u;
+      save();
+      return attach(ws, u, { token });
+    }
+    if (o.t === 'auth') {
+      const u = db.tokens[o.token];
+      if (!u || !db.users[u]) return fail(ws, 'Session expiree, reconnecte-toi');
+      if (db.users[u].blocked) return fail(ws, 'Compte bloque');
+      return attach(ws, u, {});
+    }
+    return;
+  }
+
+  const me = ws.user;
+  if (!db.users[me] || db.users[me].blocked) return fail(ws, 'Compte bloque');
+
+  switch (o.t) {
+    case 'msg': {
+      const to = String(o.to || '');
+      const text = String(o.text || '').slice(0, 4000);
+      const id = String(o.id || '').slice(0, 64);
+      if (!db.users[to] || !text || !id) return;
+      let m = db.msgs.find(x => x.id === id);
+      if (!m) {
+        m = { id, from: me, to, text, ts: Date.now(), delivered: false };
+        db.msgs.push(m);
+        if (db.msgs.length > 20000) db.msgs.splice(0, db.msgs.length - 20000);
+      }
+      send(ws, { t: 'sent', id, ts: m.ts });
+      if (!m.delivered && toUser(to, Object.assign({ t: 'msg' }, m))) {
+        m.delivered = true;
+        toUser(me, { t: 'delivered', id });
+      } else if (m.delivered) {
+        send(ws, { t: 'delivered', id });
+      }
+      save();
+      break;
+    }
+    case 'history': {
+      const w = String(o.with || '');
+      const list = db.msgs.filter(m => (m.from === me && m.to === w) || (m.from === w && m.to === me)).slice(-200);
+      send(ws, { t: 'history', with: w, msgs: list });
+      break;
+    }
+    case 'invisible':
+      db.users[me].invisible = !!o.on;
+      save();
+      toUser(me, { t: 'invisible', on: !!o.on });
+      pushContacts();
+      break;
+  }
+}
+
+server.listen(PORT, () => console.log('Wasla serveur sur le port ' + PORT));
